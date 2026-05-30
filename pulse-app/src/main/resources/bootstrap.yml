@@ -1,0 +1,13 @@
+spring:
+  application:
+    name: pulse-app
+  profiles:
+    active: dev
+  cloud:
+    nacos:
+      config:
+        server-addr: 127.0.0.1:8848
+        username: nacos
+        password: nacos
+        file-extension: yaml
+        namespace: public
