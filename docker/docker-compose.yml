@@ -18,6 +18,7 @@ services:
       - --server_id=1
     volumes:
       - ./data/mysql:/var/lib/mysql
+      - ./init-sql:/docker-entrypoint-initdb.d
     networks:
       - pulse-net
 
