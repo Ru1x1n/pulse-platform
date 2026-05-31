@@ -1,0 +1,36 @@
+package com.duanruixin.pulse.app.entity;
+
+import com.baomidou.mybatisplus.annotation.*;
+import lombok.Data;
+
+import java.io.Serializable;
+import java.time.LocalDateTime;
+
+@Data
+@TableName("t_app")
+public class App implements Serializable {
+
+    @TableId(type = IdType.AUTO)
+    private Long id;
+
+    private Long tenantId;
+
+    private String appName;
+
+    private String appKey;
+
+    private String appSecret;
+
+    private Integer dailyQuota;
+
+    private Integer status;
+
+    @TableField(fill = FieldFill.INSERT)
+    private LocalDateTime createTime;
+
+    @TableField(fill = FieldFill.INSERT_UPDATE)
+    private LocalDateTime updateTime;
+
+    @TableLogic
+    private Integer isDeleted;
+}
