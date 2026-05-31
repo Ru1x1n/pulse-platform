@@ -91,21 +91,5 @@ public class SnowflakeIdGenerator {
     }
 
 
-    public static void main(String[] args) {
-        SnowflakeIdGenerator gen = new SnowflakeIdGenerator(1, 1);
 
-        // 生成 10 个 ID
-        for (int i = 0; i < 10; i++) {
-            System.out.println(gen.nextId());
-        }
-
-        // 性能测试:1 秒能生成多少 ID
-        long start = System.currentTimeMillis();
-        int count = 0;
-        while (System.currentTimeMillis() - start < 1000) {
-            gen.nextId();
-            count++;
-        }
-        System.out.println("\n1 秒生成 ID 数: " + count);
-    }
 }
