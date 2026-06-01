@@ -33,4 +33,6 @@ public class HelloController {
         // 故意抛业务异常,验证全局异常处理器是否生效
         throw new BusinessException(ErrorCode.APP_NOT_FOUND);
     }
+
+
 }

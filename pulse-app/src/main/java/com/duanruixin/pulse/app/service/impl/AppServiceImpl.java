@@ -13,7 +13,8 @@ import com.duanruixin.pulse.common.result.ErrorCode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-
+import org.redisson.api.RBucket;
+import org.redisson.api.RedissonClient;
 import java.util.List;
 
 @Slf4j
@@ -24,6 +25,38 @@ public class AppServiceImpl
         implements AppService {
 
     private final TenantService tenantService;
+    private final RedissonClient redissonClient;
+
+    /** 应用缓存 key 模板 */
+    private static final String CACHE_KEY = "pulse:app:key:";
+    /** 缓存过期时间:10 分钟 */
+    private static final long CACHE_TTL_SECONDS = 600;
+    @Override
+    public App getByAppKeyCached(String appKey) {
+        String cacheKey = CACHE_KEY + appKey;
+        RBucket<App> bucket = redissonClient.getBucket(cacheKey);
+
+        // 1. 查缓存
+        App cached = bucket.get();
+        if (cached != null) {
+            log.debug("命中缓存: {}", cacheKey);
+            return cached;
+        }
+
+        // 2. 缓存未命中,查 DB
+        App app = this.lambdaQuery()
+                .eq(App::getAppKey, appKey)
+                .eq(App::getStatus, 1)
+                .one();
+
+        // 3. 回写缓存(即使是 null 也缓存,防穿透 —— 后面 Day 5 会优化)
+        if (app != null) {
+            bucket.set(app, java.time.Duration.ofSeconds(CACHE_TTL_SECONDS));
+            log.debug("写入缓存: {}", cacheKey);
+        }
+
+        return app;
+    }
 
     @Override
     public App createApp(AppCreateDTO dto) {

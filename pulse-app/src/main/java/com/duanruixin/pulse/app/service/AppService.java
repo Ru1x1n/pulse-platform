@@ -17,4 +17,6 @@ public interface AppService extends IService<App> {
      * 查询租户下所有应用
      */
     List<App> listByTenantId(Long tenantId);
+    App getByAppKeyCached(String appKey);
+
 }

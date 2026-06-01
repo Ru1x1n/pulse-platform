@@ -6,6 +6,17 @@ spring:
     name: pulse-app
   profiles:
     active: dev
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: redis123456
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
 
   # 数据源配置
   datasource:
@@ -22,18 +33,24 @@ spring:
         password: nacos
         namespace: public
 
+# Redisson 配置(顶级节点,和 spring 同级)
+redisson:
+  address: redis://localhost:6379
+  password: redis123456
+  database: 0
+
 # MyBatis-Plus 配置
 mybatis-plus:
   configuration:
-    map-underscore-to-camel-case: true   # 下划线转驼峰(create_time → createTime)
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl   # 打印 SQL 到控制台
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
   global-config:
     db-config:
-      logic-delete-field: isDeleted      # 全局逻辑删除字段
-      logic-delete-value: 1               # 删除时设置为 1
-      logic-not-delete-value: 0           # 未删除是 0
-      id-type: AUTO                       # 主键自增
-  mapper-locations: classpath*:mapper/**/*.xml   # mapper xml 位置
+      logic-delete-field: isDeleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+      id-type: AUTO
+  mapper-locations: classpath*:mapper/**/*.xml
 
 logging:
   level:
