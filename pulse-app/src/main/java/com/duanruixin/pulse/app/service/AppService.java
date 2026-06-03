@@ -18,5 +18,5 @@ public interface AppService extends IService<App> {
      */
     List<App> listByTenantId(Long tenantId);
     App getByAppKeyCached(String appKey);
-
+    App getByIdCached(Long appId);
 }

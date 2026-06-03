@@ -52,7 +52,7 @@ public class QuotaService {
      * 扣减配额,失败抛业务异常
      */
     public void deductQuota(Long appId) {
-        App app = appService.getById(appId);
+        App app = appService.getByIdCached(appId);
         if (app == null) {
             throw new BusinessException(ErrorCode.APP_NOT_FOUND);
         }

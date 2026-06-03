@@ -15,6 +15,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.redisson.api.RBucket;
 import org.redisson.api.RedissonClient;
+
+import java.time.Duration;
 import java.util.List;
 
 @Slf4j
@@ -94,5 +96,25 @@ public class AppServiceImpl
                 .eq(App::getStatus, 1)
                 .orderByDesc(App::getCreateTime)
                 .list();
+    }
+
+
+    private static final String CACHE_KEY_BY_ID = "pulse:app:id:";
+
+    @Override
+    public App getByIdCached(Long appId) {
+        String cacheKey = CACHE_KEY_BY_ID + appId;
+        RBucket<App> bucket = redissonClient.getBucket(cacheKey);
+
+        App cached = bucket.get();
+        if (cached != null) {
+            return cached;
+        }
+
+        App app = this.getById(appId);
+        if (app != null) {
+            bucket.set(app, Duration.ofSeconds(CACHE_TTL_SECONDS));
+        }
+        return app;
     }
 }
