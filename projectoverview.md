@@ -55,7 +55,66 @@
 - 渠道故障切换时间:**< 15 秒**
 
 
+# Pulse 项目接管文档
 
+## 个人背景
+- 段锐昕,UVA 双学位(2026 校招求职 Java 后端)
+- 简历项目:已删除烽火云(课程项目)和物业管理(业务弱),Pulse 是主力项目
+
+## 项目定位
+Pulse - 企业级 SaaS 消息推送中台
+模拟极光推送/个推等商业服务,统一对接短信/邮件/Push/微信四类渠道
+
+## 技术栈
+- JDK 17 + Spring Boot 3.2.5 + Spring Cloud Alibaba 2023.0.1.0
+- Nacos 2.3 / Redis 7.2 + Redisson 3.27.2 / MySQL 8 / MyBatis-Plus 3.5.5
+- Maven 3.9.16 / Docker Compose
+- GroupId: com.duanruixin.pulse
+
+## 项目结构
+pulse-platform/
+├── pulse-common(Result/ErrorCode/Exception/JwtUtil/SnowflakeId/SignUtil)
+├── pulse-app(端口 8081)
+│   ├── controller(Hello/Tenant/App/Template/ExternalSend)
+│   ├── service(TenantService/AppService/TemplateService/TemplateRenderer/QuotaService)
+│   ├── mapper(TenantMapper/AppMapper/TemplateMapper)
+│   ├── entity(Tenant/App/Template)
+│   ├── interceptor(ApiAuthInterceptor 鉴权)
+│   └── config(MybatisPlusConfig/RedissonConfig/WebMvcConfig/MetaObjectHandler)
+└── docker(MySQL/Redis/Nacos)
+
+## 已完成进度(Day 1-5)
+- ✅ Day 1: 项目骨架 + Hello + Nacos
+- ✅ Day 2: 工具类(JWT/Snowflake/Sign) + 单元测试 + 3 张表
+- ✅ Day 3: MyBatis-Plus + 租户/应用 CRUD
+- ✅ Day 4: API 鉴权(Key+签名+时间戳) + Redis 缓存密钥 + Lua 配额扣减
+- ✅ Day 5: 模板表 + 变量渲染 + 真正按模板发送
+
+## 关键设计决策
+1. **三层 API 鉴权**:Header X-App-Key + X-Timestamp + X-Sign(HMAC-SHA256)
+2. **配额 Redis Lua 原子扣减**:Key 设 2 天 TTL(留缓冲)
+3. **app_secret 只在创建时返回一次**:查询接口手动置 null
+4. **GlobalExceptionHandler 三档处理**:Business→warn,Validation→警告,Exception→error
+5. **依赖 scope 严格**:pulse-common 的 web/lombok 设 provided 避免污染
+6. **构造方法注入(RequiredArgsConstructor)** 替代 @Autowired 字段注入
+7. **路径区分**:/api/v1/** 后台管理,/api/external/** 业务方调用走拦截器
+8. **模板变量自动提取**:正则 \{\{(\w+)}} 从 content 抽变量名
+
+## 已踩过的坑(防止重复)
+- JDK 25 太新 → 降 17
+- @RequestParam/@PathVariable 必须显式写 name(Spring Boot 3 不默认带 -parameters)
+- spring-boot-starter-web 不自带 validation(Spring Boot 2.3+ 剥离)
+- Redisson 配置要放根级 redisson:(不要嵌套在 spring 下)
+- Postman URL 框不能带换行(粘贴时容易带)
+- MyBatis Lambda 查询用 lambdaQuery() 而非 selectList
+
+## 当前 GitHub
+https://github.com/Ru1x1n/pulse-platform
+
+## 数据库测试数据
+- 租户:tenant_code=TEST_A (id=2)
+- 应用:app_key=pulse_xxx(查 t_app 拿真实值)
+- 模板:T001(验证码)、T002(订单通知)
 
 
 
