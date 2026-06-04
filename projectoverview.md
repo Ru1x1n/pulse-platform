@@ -170,3 +170,576 @@ Day 25:JMeter 全链路压测 + Arthas 诊断
 压测真实业务流程(鉴权→频控→敏感词→路由→发送→落库→ES)→ 用 Arthas 看慢方法 / 看线程栈
 Day 26:Docker Compose 一键启动
 完善 docker-compose.yml 把 8 个中间件 + 你的服务全打包 → 任何人 git clone + docker-compose up 就能跑
+
+
+项目结构：
+
+
+
+
+
+
+
+
+
+C:\dev\pulse-platform
+├── pom.xml                              # 父工程,packaging=pom,管理 BOM
+├── .gitignore                           # 已排除 .idea/target/docker/data
+├── README.md
+│
+├── docker/
+│   ├── docker-compose.yml               # MySQL/Redis/Nacos 三容器
+│   └── init-sql/
+│       └── 01-schema.sql                # 建表+测试数据
+│
+├── docs/
+│   ├── PROJECT_HANDOFF.md               # 本文档
+│   └── diary/
+│       ├── day01.md ~ day05.md          # 每日踩坑日志
+│
+├── pulse-common/                        # 公共模块(被所有业务依赖)
+│   ├── pom.xml
+│   └── src/main/java/com/duanruixin/pulse/common/
+│       ├── result/
+│       │   ├── Result.java              # 统一响应封装 {code,message,data,timestamp}
+│       │   └── ErrorCode.java           # 错误码枚举(40001-60003)
+│       ├── exception/
+│       │   ├── BusinessException.java   # 业务异常,携带 ErrorCode
+│       │   └── GlobalExceptionHandler.java  # @RestControllerAdvice,捕获异常→Result
+│       └── util/
+│           ├── JwtUtil.java             # JJWT 0.12.5 HS256,2小时过期
+│           ├── SnowflakeIdGenerator.java  # 64位:1符号+41时间戳+5DC+5机器+12序列
+│           └── SignUtil.java            # HMAC-SHA256,TreeMap 排序拼接
+│
+└── pulse-app/                           # 应用管理微服务(端口 8081)
+├── pom.xml
+└── src/main/java/com/duanruixin/pulse/app/
+├── PulseAppApplication.java     # @SpringBootApplication + @EnableDiscoveryClient
+├── SignGenerator.java           # 临时工具:生成 Postman 签名(Day 4 加的)
+├── controller/
+│   ├── HelloController.java     # /hello 健康检查
+│   ├── TenantController.java    # /api/v1/tenant
+│   ├── AppController.java       # /api/v1/app
+│   ├── TemplateController.java  # /api/v1/template
+│   └── ExternalSendController.java  # /api/external/v1/send(走拦截器)
+├── service/
+│   ├── TenantService.java + Impl
+│   ├── AppService.java + Impl   # 含 getByAppKeyCached(Redis 缓存)
+│   ├── TemplateService.java + Impl  # 含 getByCodeCached(Redis 缓存)
+│   ├── TemplateRenderer.java    # 正则 {{(\w+)}} 替换变量
+│   └── quota/
+│       └── QuotaService.java    # Lua 脚本原子扣配额
+├── mapper/
+│   ├── TenantMapper.java        # extends BaseMapper<Tenant>
+│   ├── AppMapper.java
+│   └── TemplateMapper.java
+├── entity/
+│   ├── Tenant.java              # @TableName("t_tenant")
+│   ├── App.java
+│   └── Template.java
+├── dto/
+│   ├── TenantCreateDTO.java     # @NotBlank/@Email 校验
+│   ├── AppCreateDTO.java
+│   ├── TemplateCreateDTO.java
+│   └── SendMessageDTO.java      # 业务方调发送接口的入参
+├── vo/
+│   └── AppCreateVO.java         # 创建应用返回 secret 一次
+├── interceptor/
+│   └── ApiAuthInterceptor.java  # 三层鉴权(Key+Sign+Timestamp)
+└── config/
+├── MybatisPlusConfig.java   # @MapperScan + 分页插件
+├── MybatisMetaObjectHandler.java  # 自动填充 createTime/updateTime
+├── RedissonConfig.java      # RedissonClient Bean
+└── WebMvcConfig.java        # 注册
+
+
+建造的表：
+
+
+## 数据库(MySQL 8 - pulse 库)
+
+4 张表已建:
+
+```sql
+-- t_tenant 租户表(id=2 → tenant_code=TEST_A)
+-- t_app    应用表(id=2 → app_key=pulse_V8F368Yfkq4QJqsIE80Iz6nyMMFtsNUe)
+--                   app_secret=fmDpGRoSkXIjiSUUtMbAVf8nHyFRD6pSFy6CtB0AYTslkwjs37ZEINArboRE2peP
+-- t_channel_config 渠道配置表(Day 2 建,Day 5 暂未用)
+-- t_template 模板表(T001=验证码,T002=订单通知,T100=测试,均 app_id=2)
+```
+
+**重要约定**:
+- 所有表 `t_` 前缀
+- 必备三件套:`create_time` / `update_time` / `is_deleted`(逻辑删除)
+- 主键 BIGINT 自增(业务表),日志表用雪花 ID
+- 状态字段 TINYINT,Java 端用枚举管理常量
+- **不用外键**(分库分表友好)
+- JSON 字段存灵活配置(如 t_channel_config.config_json、t_template.variables)
+
+## 关键设计决策(必须遵守)
+
+1. **三层 API 鉴权**:`X-App-Key + X-Timestamp(5分钟容差) + X-Sign(HMAC-SHA256)`
+2. **配额扣减**:Redis Lua 脚本原子操作 `GET → 比较 → INCR`,Key TTL=2 天(留缓冲)
+3. **app_secret 只创建时返回一次**,GET 接口手动 setAppSecret(null)
+4. **构造方法注入**(@RequiredArgsConstructor)替代 @Autowired 字段注入
+5. **路径分离**:`/api/v1/**` 后台管理(无需鉴权) vs `/api/external/**` 业务方走拦截器
+6. **模板变量**:用正则 `\{\{(\w+)}}` 从 content 自动提取,渲染时缺变量抛 BusinessException
+7. **pulse-common 依赖严格设 provided**,避免污染下游模块
+8. **GlobalExceptionHandler 已处理**:BusinessException(业务异常)+ MethodArgumentNotValidException(参数校验)+ 兜底 Exception
+9. **Redisson 配置在根级 `redisson:`**,不嵌套在 spring 下
+10. **MyBatis-Plus 用 lambdaQuery()**,避免硬编码字段名
+
+## 已踩过的坑(防止重复)
+
+| # | 坑 | 解决 |
+|---|---|---|
+| 1 | JDK 25 太新 | 降到 JDK 17 |
+| 2 | Maven Archetype 创建模板有占位符 | 用 New Project 不用 Archetype |
+| 3 | @RequestParam/@PathVariable 必须显式写 name(Spring Boot 3 不默认带 -parameters) | 父 pom 加 `<arg>-parameters</arg>` + IDEA Java Compiler 也加 + 代码显式写 name |
+| 4 | spring-boot-starter-web 不自带 validation(2.3+ 剥离) | 单独加 spring-boot-starter-validation 依赖 |
+| 5 | Spring Boot 3 用 jakarta.* 不是 javax.* | 全部改 jakarta |
+| 6 | pulse-common 设 provided 跑 main 报 NoClassDefFoundError | 用单元测试代替 main 验证(test scope 自带依赖) |
+| 7 | Redisson 配置必须放根级 `redisson:` | 不嵌套在 spring 下 |
+| 8 | Postman URL 框不能带换行符 | 手动输入,不要复制粘贴 |
+| 9 | MyBatis-Plus 必须用 Lambda 查询 lambdaQuery() | 避免硬编码字段名 |
+| 10 | 父 pom 一度有重复 `<module>pulse-app</module>` | 删重复 |
+| 11 | Day 1 把代码写在 src/main/resources/ 下 | 应在 src/main/java/ |
+| 12 | Day 3 GlobalExceptionHandler 把 NoResourceFoundException 当 500 | 暂未优化,TODO 中(理想返回 404) |
+
+## 当前进度
+
+- ✅ **Day 1**: 项目骨架 + Hello + Nacos 注册(2026-05-29)
+- ✅ **Day 2**: 工具类(JWT/Snowflake/Sign)+ 11 个单元测试 + 3 张表 DDL
+- ✅ **Day 3**: MyBatis-Plus 接入 + 租户/应用 CRUD + 5 个单元测试
+- ✅ **Day 4**: API 鉴权(Key+Sign+TS)+ Redis 缓存密钥 + Lua 配额扣减 + 端到端测试(5 失败场景全过)
+- ✅ **Day 5**: t_template 表 + 模板 CRUD + TemplateRenderer 正则渲染 + 模板 Redis 缓存(10 分钟 TTL)+ ExternalSendController 接 Body 真渲染
+
+## TODO(性能优化,Day 7 压测后做)
+
+1. **QuotaService 多查一次 t_app**
+  - 现象:每次发送都 `SELECT FROM t_app WHERE id=?`,虽然鉴权拦截器已经查过缓存
+  - 方案 A:给 AppService 加 `getByIdCached`
+  - 方案 B:拦截器把 App 对象塞 request,QuotaService.deductQuota 接收 App 参数
+  - **等 Day 7 压测拿到 baseline 数据再优化,对比前后写进简历金句**
+
+2. **GlobalExceptionHandler 优化**
+  - NoResourceFoundException 应返回 404 而非 500
+  - 已加 MethodArgumentNotValidException 处理 ✅
+
+## Redis Key 命名规范
+
+          Code snapshots:
+          
+          
+          
+          package com.duanruixin.pulse.common.result;
+          
+          import lombok.AllArgsConstructor;
+          import lombok.Getter;
+          
+          /**
+          * 错误码枚举
+            * 规范:
+            *   200xx: 通用
+            *   400xx: 参数/认证错误
+            *   500xx: 服务器内部错误
+            *   600xx: 业务错误
+                */
+                @Getter
+                @AllArgsConstructor
+                public enum ErrorCode {
+          
+          SUCCESS(200, "OK"),
+          
+          PARAM_INVALID(40001, "参数无效"),
+          UNAUTHORIZED(40101, "未授权"),
+          API_KEY_INVALID(40102, "API Key 无效"),
+          SIGN_INVALID(40103, "签名校验失败"),
+          TIMESTAMP_EXPIRED(40104, "请求时间戳过期"),
+          FORBIDDEN(40301, "权限不足"),
+          NOT_FOUND(40401, "资源不存在"),
+          
+          SERVER_ERROR(50001, "服务器内部错误"),
+          SERVICE_UNAVAILABLE(50301, "服务不可用"),
+          
+          APP_NOT_FOUND(60001, "应用不存在"),
+          APP_DISABLED(60002, "应用已停用"),
+          QUOTA_EXCEEDED(60003, "配额已用尽"),
+          TEMPLATE_NOT_FOUND(60101, "模板不存在"),
+          SENSITIVE_WORD_DETECTED(60201, "内容包含敏感词"),
+          USER_BLOCKED(60202, "用户在黑名单"),
+          RATE_LIMIT(60203, "发送过于频繁"),
+          CHANNEL_UNAVAILABLE(60301, "渠道不可用");
+          
+          private final Integer code;
+          private final String message;
+    }
+
+
+
+
+
+          package com.duanruixin.pulse.common.result;
+          
+          import lombok.Data;
+          import java.io.Serializable;
+          
+          /**
+          * 通用响应封装
+            * @param <T> 数据类型
+              */
+              @Data
+              public class Result<T> implements Serializable {
+          
+              private Integer code;
+              private String message;
+              private T data;
+              private Long timestamp;
+          
+              private Result() {
+              this.timestamp = System.currentTimeMillis();
+              }
+          
+              public static <T> Result<T> success() {
+              return success(null);
+              }
+          
+              public static <T> Result<T> success(T data) {
+              Result<T> r = new Result<>();
+              r.setCode(200);
+              r.setMessage("OK");
+              r.setData(data);
+              return r;
+              }
+          
+              public static <T> Result<T> fail(Integer code, String message) {
+              Result<T> r = new Result<>();
+              r.setCode(code);
+              r.setMessage(message);
+              return r;
+              }
+          
+              public static <T> Result<T> fail(ErrorCode errorCode) {
+              return fail(errorCode.getCode(), errorCode.getMessage());
+              }
+              }、
+
+
+
+            package com.duanruixin.pulse.common.exception;
+
+      import com.duanruixin.pulse.common.result.ErrorCode;
+      import com.duanruixin.pulse.common.result.Result;
+      import lombok.extern.slf4j.Slf4j;
+      import org.springframework.web.bind.MethodArgumentNotValidException;
+      import org.springframework.web.bind.annotation.ExceptionHandler;
+      import org.springframework.web.bind.annotation.RestControllerAdvice;
+      
+      import java.util.stream.Collectors;
+      
+      @Slf4j
+      @RestControllerAdvice
+      public class GlobalExceptionHandler {
+
+    @ExceptionHandler(BusinessException.class)
+    public Result<Void> handleBiz(BusinessException e) {
+        log.warn("业务异常: code={}, msg={}", e.getCode(), e.getMessage());
+        return Result.fail(e.getCode(), e.getMessage());
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public Result<Void> handleIllegalArg(IllegalArgumentException e) {
+        log.warn("参数异常: {}", e.getMessage());
+        return Result.fail(ErrorCode.PARAM_INVALID.getCode(), e.getMessage());
+    }
+
+    @ExceptionHandler(Exception.class)
+    public Result<Void> handleAll(Exception e) {
+        log.error("系统异常", e);
+        return Result.fail(ErrorCode.SERVER_ERROR);
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public Result<Void> handleValidation(MethodArgumentNotValidException e) {
+        String msg = e.getBindingResult().getFieldErrors().stream()
+                .map(fe -> fe.getField() + ":" + fe.getDefaultMessage())
+                .collect(Collectors.joining(", "));
+        log.warn("参数校验失败: {}", msg);
+        return Result.fail(ErrorCode.PARAM_INVALID.getCode(), msg);
+      }
+    }
+
+
+
+
+        package com.duanruixin.pulse.app.interceptor;
+        
+        import com.duanruixin.pulse.app.entity.App;
+        import com.duanruixin.pulse.app.service.AppService;
+        import com.duanruixin.pulse.common.exception.BusinessException;
+        import com.duanruixin.pulse.common.result.ErrorCode;
+        import com.duanruixin.pulse.common.util.SignUtil;
+        import jakarta.servlet.http.HttpServletRequest;
+        import jakarta.servlet.http.HttpServletResponse;
+        import lombok.RequiredArgsConstructor;
+        import lombok.extern.slf4j.Slf4j;
+        import org.springframework.stereotype.Component;
+        import org.springframework.web.servlet.HandlerInterceptor;
+        
+        import java.util.HashMap;
+        import java.util.Map;
+        
+        /**
+        * API 鉴权拦截器
+          * 校验业务方调用接口时的 app_key + timestamp + sign
+            */
+            @Slf4j
+            @Component
+            @RequiredArgsConstructor
+            public class ApiAuthInterceptor implements HandlerInterceptor {
+        
+            private final AppService appService;
+        
+            /** 时间戳允许的偏差(毫秒)5 分钟 */
+            private static final long TIMESTAMP_TOLERANCE = 5 * 60 * 1000L;
+        
+            /** Request attribute key,用于把 appId 传给后续业务代码 */
+            public static final String ATTR_APP_ID = "X-App-Id";
+        
+            @Override
+            public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+            String appKey = request.getHeader("X-App-Key");
+            String timestamp = request.getHeader("X-Timestamp");
+            String sign = request.getHeader("X-Sign");
+
+         // 1. 三个 Header 不能为空
+         if (appKey == null || timestamp == null || sign == null) {
+             throw new BusinessException(ErrorCode.UNAUTHORIZED, "缺少鉴权 Header");
+         }
+
+         // 2. 时间戳防重放(5 分钟内)
+         long ts;
+         try {
+             ts = Long.parseLong(timestamp);
+         } catch (NumberFormatException e) {
+             throw new BusinessException(ErrorCode.TIMESTAMP_EXPIRED, "时间戳格式错误");
+         }
+         long now = System.currentTimeMillis();
+         if (Math.abs(now - ts) > TIMESTAMP_TOLERANCE) {
+             log.warn("时间戳过期: appKey={}, ts={}, now={}", appKey, ts, now);
+             throw new BusinessException(ErrorCode.TIMESTAMP_EXPIRED, "请求时间戳过期");
+         }
+
+         // 3. 根据 appKey 查应用(查 secret)
+         App app = appService.getByAppKeyCached(appKey);
+         if (app == null) {
+             throw new BusinessException(ErrorCode.API_KEY_INVALID, "App Key 无效或已停用");
+         }
+
+         // 4. 验证签名
+         // 参与签名的参数:appKey + timestamp(可以再加业务参数,这里简化)
+         Map<String, String> params = new HashMap<>();
+         params.put("appKey", appKey);
+         params.put("timestamp", timestamp);
+         params.put("sign", sign);
+
+         if (!SignUtil.verify(params, app.getAppSecret())) {
+             log.warn("签名校验失败: appKey={}", appKey);
+             throw new BusinessException(ErrorCode.SIGN_INVALID);
+         }
+
+         // 5. 把 appId 放到 request,供业务代码使用
+         request.setAttribute(ATTR_APP_ID, app.getId());
+         log.debug("API 鉴权通过: appKey={}, appId={}", appKey, app.getId());
+
+         return true;
+    }
+    }
+
+
+
+        */
+              @Slf4j
+              @Component
+              public class TemplateRenderer {
+
+    private static final Pattern VAR_PATTERN = Pattern.compile("\\{\\{(\\w+)}}");
+
+    /**
+     * 渲染模板
+     *
+     * @param template 模板内容,含 {{var}} 占位符
+     * @param variables 变量 Map
+     * @return 渲染后的字符串
+     */
+    public String render(String template, Map<String, String> variables) {
+        if (template == null || template.isEmpty()) {
+            return "";
+        }
+
+        Matcher matcher = VAR_PATTERN.matcher(template);
+        StringBuilder result = new StringBuilder();
+
+        while (matcher.find()) {
+            String varName = matcher.group(1);
+            String value = variables == null ? null : variables.get(varName);
+            if (value == null) {
+                throw new BusinessException(ErrorCode.PARAM_INVALID,
+                        "缺少变量: " + varName);
+            }
+            matcher.appendReplacement(result, Matcher.quoteReplacement(value));
+        }
+        matcher.appendTail(result);
+
+        return result.toString();
+    }
+}
+
+
+
+    package com.duanruixin.pulse.app.service.quota;
+    
+    import com.duanruixin.pulse.app.entity.App;
+    import com.duanruixin.pulse.app.service.AppService;
+    import com.duanruixin.pulse.common.exception.BusinessException;
+    import com.duanruixin.pulse.common.result.ErrorCode;
+    import lombok.RequiredArgsConstructor;
+    import lombok.extern.slf4j.Slf4j;
+    import org.redisson.api.RScript;
+    import org.redisson.api.RedissonClient;
+    import org.redisson.client.codec.StringCodec;
+    import org.springframework.stereotype.Service;
+    
+    import java.time.LocalDate;
+    import java.time.format.DateTimeFormatter;
+    import java.util.Collections;
+    
+    /**
+    * 配额管理服务
+      * Redis Key: pulse:quota:{appId}:{yyyyMMdd}
+      * Value: 当日已使用配额
+        */
+        @Slf4j
+        @Service
+        @RequiredArgsConstructor
+        public class QuotaService {
+    
+        private static final String KEY_TEMPLATE = "pulse:quota:%d:%s";
+        private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
+    
+        /**
+        * Lua 脚本:原子地查+判断+扣减
+        * KEYS[1] = quota key
+        * ARGV[1] = daily quota 上限
+        * ARGV[2] = key 过期秒数(2 天)
+        * 返回:1 成功,0 配额不足
+          */
+          private static final String DECR_QUOTA_LUA =
+          "local used = tonumber(redis.call('GET', KEYS[1]) or '0') " +
+          "local limit = tonumber(ARGV[1]) " +
+          "if used >= limit then " +
+          "  return 0 " +
+          "end " +
+          "redis.call('INCR', KEYS[1]) " +
+          "redis.call('EXPIRE', KEYS[1], ARGV[2]) " +
+          "return 1";
+    
+        private final RedissonClient redissonClient;
+        private final AppService appService;
+    
+        /**
+        * 扣减配额,失败抛业务异常
+          */
+          public void deductQuota(Long appId) {
+          App app = appService.getByIdCached(appId);
+          if (app == null) {
+          throw new BusinessException(ErrorCode.APP_NOT_FOUND);
+          }
+    
+          String key = String.format(KEY_TEMPLATE, appId, LocalDate.now().format(DATE_FMT));
+    
+          RScript script = redissonClient.getScript(StringCodec.INSTANCE);
+          Long result = script.eval(
+          RScript.Mode.READ_WRITE,
+          DECR_QUOTA_LUA,
+          RScript.ReturnType.INTEGER,
+          Collections.singletonList(key),
+          String.valueOf(app.getDailyQuota()),
+          "172800"   // 2 天过期(防止跨日数据残留)
+          );
+    
+          if (result == null || result == 0) {
+          log.warn("配额已用尽: appId={}, dailyQuota={}", appId, app.getDailyQuota());
+          throw new BusinessException(ErrorCode.QUOTA_EXCEEDED);
+          }
+          log.debug("配额扣减成功: appId={}", appId);
+          }
+    
+        /**
+        * 查当日已用配额
+          */
+          public Long getUsedQuota(Long appId) {
+          String key = String.format(KEY_TEMPLATE, appId, LocalDate.now().format(DATE_FMT));
+          String val = (String) redissonClient.getBucket(key, StringCodec.INSTANCE).get();
+          return val == null ? 0L : Long.parseLong(val);
+          }
+          }
+
+
+      server:
+      port: 8081
+      
+      spring:
+      application:
+      name: pulse-app
+      profiles:
+      active: dev
+      data:
+      redis:
+      host: localhost
+      port: 6379
+      password: redis123456
+      timeout: 3000ms
+      lettuce:
+      pool:
+      max-active: 8
+      max-idle: 8
+      min-idle: 0
+      
+      # 数据源配置
+      datasource:
+      driver-class-name: com.mysql.cj.jdbc.Driver
+      url: jdbc:mysql://localhost:3306/pulse?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+      username: root
+      password: root123456
+      
+      cloud:
+      nacos:
+      discovery:
+      server-addr: 127.0.0.1:8848
+      username: nacos
+      password: nacos
+      namespace: public
+      
+      # Redisson 配置(顶级节点,和 spring 同级)
+      redisson:
+      address: redis://localhost:6379
+      password: redis123456
+      database: 0
+      
+      # MyBatis-Plus 配置
+      mybatis-plus:
+      configuration:
+      map-underscore-to-camel-case: true
+      log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+      global-config:
+      db-config:
+      logic-delete-field: isDeleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+      id-type: AUTO
+      mapper-locations: classpath*:mapper/**/*.xml
+      
+      logging:
+      level:
+      com.duanruixin.pulse: DEBUG
