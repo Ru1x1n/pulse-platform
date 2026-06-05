@@ -1,0 +1,9 @@
+# application-perf.yml —— 压测专用,只覆盖日志,其余沿用主配置
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+
+logging:
+  level:
+    com.duanruixin.pulse: WARN
+    root: WARN
