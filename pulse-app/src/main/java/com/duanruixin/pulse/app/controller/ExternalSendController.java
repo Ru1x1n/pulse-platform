@@ -7,6 +7,7 @@ import com.duanruixin.pulse.app.mq.MessageProducer;
 import com.duanruixin.pulse.app.mq.MessageTask;
 import com.duanruixin.pulse.app.service.TemplateRenderer;
 import com.duanruixin.pulse.app.service.TemplateService;
+import com.duanruixin.pulse.app.service.audit.AuditService;
 import com.duanruixin.pulse.app.service.quota.QuotaService;
 import com.duanruixin.pulse.common.exception.BusinessException;
 import com.duanruixin.pulse.common.result.ErrorCode;
@@ -33,7 +34,7 @@ public class ExternalSendController {
     private final TemplateService templateService;
     private final TemplateRenderer templateRenderer;
     private final MessageProducer messageProducer;
-
+    private final AuditService auditService;
     private final SnowflakeIdGenerator snowflake = new SnowflakeIdGenerator(1, 1);
 
     @PostMapping("/send")
@@ -54,6 +55,8 @@ public class ExternalSendController {
 
         // 3. 渲染模板(variables 全接收者共用,渲染一次;缺变量同步抛错)
         String renderedContent = templateRenderer.render(template.getContent(), dto.getVariables());
+        auditService.check(renderedContent);
+
 
         // 4. 每个接收者生成一个 messageId,组任务投 MQ(发送动作异步化)
         List<String> messageIds = new ArrayList<>();
