@@ -9,6 +9,7 @@ import com.duanruixin.pulse.app.service.TemplateRenderer;
 import com.duanruixin.pulse.app.service.TemplateService;
 import com.duanruixin.pulse.app.service.audit.AuditService;
 import com.duanruixin.pulse.app.service.freq.FreqLimitService;
+import com.duanruixin.pulse.app.service.message.MessageService;
 import com.duanruixin.pulse.app.service.quota.QuotaService;
 import com.duanruixin.pulse.common.exception.BusinessException;
 import com.duanruixin.pulse.common.result.ErrorCode;
@@ -38,7 +39,7 @@ public class ExternalSendController {
     private final AuditService auditService;
     private final FreqLimitService freqLimitService;
     private final SnowflakeIdGenerator snowflake = new SnowflakeIdGenerator(1, 1);
-
+    private final MessageService messageService;
     @PostMapping("/send")
     public Result<Map<String, Object>> send(
             HttpServletRequest request,
@@ -65,6 +66,10 @@ public class ExternalSendController {
         for (String receiver : dto.getReceivers()) {
             freqLimitService.checkAndRecord(appId, receiver);
             String messageId = "MSG_" + snowflake.nextId();
+
+
+            messageService.saveMessage(messageId, appId, dto.getTemplateCode(),
+                    receiver, renderedContent, template.getChannelType());
 
             MessageTask task = new MessageTask();
             task.setMessageId(messageId);
