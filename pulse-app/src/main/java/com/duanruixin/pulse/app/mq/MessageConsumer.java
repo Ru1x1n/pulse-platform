@@ -6,7 +6,8 @@ import com.duanruixin.pulse.app.enums.MessageStatus;
 import com.duanruixin.pulse.app.service.TemplateService;
 import com.duanruixin.pulse.app.service.channel.ChannelHealthService;
 import com.duanruixin.pulse.app.service.channel.ChannelRouter;
-import com.duanruixin.pulse.app.service.channel.MockChannelSender;
+import com.duanruixin.pulse.app.service.channel.handler.ChannelFactory;
+import com.duanruixin.pulse.app.service.channel.handler.ChannelSendContext;
 import com.duanruixin.pulse.app.service.message.MessageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,7 +27,7 @@ public class MessageConsumer implements RocketMQListener<MessageTask> {
     private final MessageService messageService;
     private final TemplateService templateService;
     private final ChannelRouter channelRouter;
-    private final MockChannelSender mockChannelSender;
+    private final ChannelFactory channelFactory;        // Day12: 替换 MockChannelSender
     private final ChannelHealthService channelHealthService;
 
     @Override
@@ -40,18 +41,19 @@ public class MessageConsumer implements RocketMQListener<MessageTask> {
                 MessageStatus.PENDING, MessageStatus.SENDING, "开始处理");
 
         try {
-            // 1. 查模板拿 channelType(MessageTask 已带 appId + templateCode)
+            // 1. 查模板拿 channelType
             Template template = templateService.getByCodeCached(
                     task.getAppId(), task.getTemplateCode());
             Integer channelType = template.getChannelType();
 
-            // 2. 智能路由:在多个 provider 间按失败率选最优(Day11 核心)
+            // 2. 智能路由:选 provider(Day11)
             ChannelConfig channel = channelRouter.route(task.getAppId(), channelType);
 
-            // 3. Mock 发送(故障注入)
-            boolean success = mockChannelSender.send(channelType, channel.getProvider(), task);
+            // 3. 策略模式发送:按渠道类型分发到对应 Handler(Day12)
+            ChannelSendContext ctx = new ChannelSendContext(channel, task);
+            boolean success = channelFactory.get(channelType).send(ctx);
 
-            // 4. 埋点:记录成败到健康度 ZSet
+            // 4. 埋点:记录成败到健康度 ZSet(Day11)
             channelHealthService.record(channelType, channel.getProvider(), success);
 
             // 5. 推进状态(重试/死信留 Day15)
@@ -65,7 +67,6 @@ public class MessageConsumer implements RocketMQListener<MessageTask> {
                         "发送失败(" + channel.getProvider() + ")");
             }
         } catch (Exception e) {
-            // 无可用渠道 / 其他异常:落 FAILED,不让 MQ 无限重投
             log.error("【MQ消费】处理失败: messageId={}, err={}", messageId, e.getMessage(), e);
             messageService.updateStatus(messageId,
                     MessageStatus.SENDING, MessageStatus.FAILED,

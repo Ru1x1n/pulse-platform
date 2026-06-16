@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Test Plan">
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables">
+        <collectionProp name="Arguments.arguments"/>
+      </elementProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+    </TestPlan>
+    <hashTree>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Thread Group">
+        <intProp name="ThreadGroup.num_threads">50</intProp>
+        <intProp name="ThreadGroup.ramp_time">5</intProp>
+        <longProp name="ThreadGroup.duration">60</longProp>
+        <longProp name="ThreadGroup.delay">0</longProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller">
+          <intProp name="LoopController.loops">-1</intProp>
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="HTTP Request">
+          <stringProp name="HTTPSampler.domain">localhost</stringProp>
+          <stringProp name="HTTPSampler.port">8081</stringProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/external/v1/send</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{&#xd;
+  &quot;templateCode&quot;: &quot;T001&quot;,&#xd;
+  &quot;receivers&quot;: [&quot;13800000001&quot;],&#xd;
+  &quot;variables&quot;: { &quot;name&quot;: &quot;张三&quot;, &quot;code&quot;: &quot;8888&quot; }&#xd;
+}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="JSR223 PreProcessor" enabled="true">
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="filename"></stringProp>
+            <stringProp name="parameters"></stringProp>
+            <stringProp name="script">import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
+import java.nio.charset.StandardCharsets
+
+// 和你 SignGenerator 里一致的真实 key/secret
+def appKey = &quot;pulse_V8F368Yfkq4QJqsIE80Iz6nyMMFtsNUe&quot;
+def appSecret = &quot;fmDpGRoSkXIjiSUUtMbAVf8nHyFRD6pSFy6CtB0AYTslkwjs37ZEINArboRE2peP&quot;
+
+// 每次请求现取当前时间戳(毫秒)
+def timestamp = String.valueOf(System.currentTimeMillis())
+
+// 按字典序拼接:appKey 在前,timestamp 在后(字母 a &lt; t)
+def content = &quot;appKey=&quot; + appKey + &quot;&amp;timestamp=&quot; + timestamp
+
+// HMAC-SHA256 → 16进制小写(完全复刻你 SignUtil 的算法)
+Mac mac = Mac.getInstance(&quot;HmacSHA256&quot;)
+mac.init(new SecretKeySpec(appSecret.getBytes(StandardCharsets.UTF_8), &quot;HmacSHA256&quot;))
+byte[] bytes = mac.doFinal(content.getBytes(StandardCharsets.UTF_8))
+StringBuilder sb = new StringBuilder()
+for (byte b : bytes) {
+    sb.append(String.format(&quot;%02x&quot;, b))
+}
+def sign = sb.toString()
+
+// 把算好的值存进变量,供下一步 Header 引用
+vars.put(&quot;appKey&quot;, appKey)
+vars.put(&quot;timestamp&quot;, timestamp)
+vars.put(&quot;sign&quot;, sign)</stringProp>
+            <stringProp name="scriptLanguage">groovy</stringProp>
+          </JSR223PreProcessor>
+          <hashTree/>
+          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="HTTP Header Manager">
+            <collectionProp name="HeaderManager.headers">
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">X-App-Key</stringProp>
+                <stringProp name="Header.value">${appKey}</stringProp>
+              </elementProp>
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">X-Timestamp</stringProp>
+                <stringProp name="Header.value">${timestamp}</stringProp>
+              </elementProp>
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">X-Sign</stringProp>
+                <stringProp name="Header.value">${sign}</stringProp>
+              </elementProp>
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Content-Type</stringProp>
+                <stringProp name="Header.value">application/json</stringProp>
+              </elementProp>
+            </collectionProp>
+          </HeaderManager>
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>
