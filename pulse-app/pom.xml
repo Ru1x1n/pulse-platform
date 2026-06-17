@@ -102,6 +102,11 @@
             <artifactId>rocketmq-client</artifactId>
             <version>5.3.2</version>
         </dependency>
+        <!-- JavaMail：Day13 邮件真发 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

@@ -2,6 +2,21 @@ server:
   port: 8081
 
 spring:
+  mail:
+    host: smtp.qq.com
+    port: 465
+    username: 280328539@qq.com        # 完整邮箱地址，比如 123456@qq.com
+    password: yhdjlygixddicaga             # ★授权码，不是QQ登录密码！
+    protocol: smtps
+    default-encoding: UTF-8
+    properties:
+      mail:
+        smtp:
+          auth: true
+          ssl:
+            enable: true               # QQ 邮箱 465 端口走 SSL
+          socketFactory:
+            class: javax.net.ssl.SSLSocketFactory
   application:
     name: pulse-app
   profiles:
