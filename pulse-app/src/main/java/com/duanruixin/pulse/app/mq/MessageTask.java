@@ -27,4 +27,7 @@ public class MessageTask implements Serializable {
 
     /** 入队时间戳 */
     private Long enqueueTime;
+
+    /** 重试次数(首次投递=0,每重试一次+1,达上限进死信)。Day15 */
+    private Integer retryCount = 0;
 }

@@ -35,4 +35,30 @@ public class MessageProducer {
         log.info("消息入队成功: messageId={}, brokerMsgId={}, status={}",
                 task.getMessageId(), result.getMsgId(), result.getSendStatus());
     }
+
+    /** 重试延时级别映射:第1次重试用level1(1s),第2次level2(5s)...
+     *  RocketMQ 内置级别: 1s 5s 10s 30s 1m 2m ... 对应 1 2 3 4 5 6 ...
+     *  取 1s/5s/30s/2m/10m → level 1/2/4/6/14 */
+    private static final int[] RETRY_DELAY_LEVELS = {1, 2, 4, 6, 14};
+
+    /**
+     * 投递重试任务(延时消息)
+     * @param task 已把 retryCount 设为"本次是第几次重试(1-based)"
+     */
+    public void sendRetryTask(MessageTask task) {
+        int retryCount = task.getRetryCount();   // 1,2,3,4,5
+        // 取对应延时级别(retryCount 从1开始,数组下标从0)
+        int delayLevel = RETRY_DELAY_LEVELS[retryCount - 1];
+
+        Message<MessageTask> message = MessageBuilder.withPayload(task)
+                .setHeader(RocketMQHeaders.KEYS, task.getMessageId())
+                .build();
+
+        // syncSend 带延时级别的重载:timeout=3000ms, delayLevel
+        SendResult result = rocketMQTemplate.syncSend(
+                TOPIC_MESSAGE_SEND, message, 3000, delayLevel);
+
+        log.info("重试消息已投递(延时): messageId={}, 第{}次重试, delayLevel={}, brokerMsgId={}",
+                task.getMessageId(), retryCount, delayLevel, result.getMsgId());
+    }
 }

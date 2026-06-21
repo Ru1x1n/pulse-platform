@@ -1,11 +1,14 @@
 package com.duanruixin.pulse.app.service.message;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.duanruixin.pulse.app.entity.DeadLetter;
 import com.duanruixin.pulse.app.entity.Message;
 import com.duanruixin.pulse.app.entity.MessageTrack;
 import com.duanruixin.pulse.app.enums.MessageStatus;
+import com.duanruixin.pulse.app.mapper.DeadLetterMapper;
 import com.duanruixin.pulse.app.mapper.MessageMapper;
 import com.duanruixin.pulse.app.mapper.MessageTrackMapper;
+import com.duanruixin.pulse.app.mq.MessageTask;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -18,7 +21,7 @@ public class MessageService {
 
     private final MessageMapper messageMapper;
     private final MessageTrackMapper messageTrackMapper;
-
+    private final DeadLetterMapper deadLetterMapper;
     /**
      * 落库一条待发消息 + 写初始轨迹
      */
@@ -71,5 +74,42 @@ public class MessageService {
         track.setToStatus(to.getCode());
         track.setRemark(remark);
         messageTrackMapper.insert(track);
+    }
+
+    /**
+     * 重试耗尽:写死信表 + 消息状态 FAILED→RETURNED(退回)
+     * Day15
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void moveToDeadLetter(MessageTask task, Integer channelType, String lastError) {
+        // 1. 写死信表(message_id 唯一索引兜底,重复进死信会被挡)
+        DeadLetter dl = new DeadLetter();
+        dl.setMessageId(task.getMessageId());
+        dl.setAppId(task.getAppId());
+        dl.setTemplateCode(task.getTemplateCode());
+        dl.setReceiver(task.getReceiver());
+        dl.setContent(task.getContent());
+        dl.setChannelType(channelType);
+        dl.setRetryCount(task.getRetryCount());
+        dl.setLastError(lastError);
+        deadLetterMapper.insert(dl);
+
+        // 2. 消息状态 FAILED → RETURNED(进死信即退回)
+        updateStatus(task.getMessageId(), MessageStatus.FAILED, MessageStatus.RETURNED,
+                "重试耗尽,进入死信");
+
+        log.warn("消息进入死信: messageId={}, 重试{}次, 原因={}",
+                task.getMessageId(), task.getRetryCount(), lastError);
+    }
+
+    /**
+     * 更新重试次数(同步进库,给人看/统计;流转靠 MQ 消息体)
+     */
+    public void updateRetryCount(String messageId, Integer retryCount) {
+        Message update = new Message();
+        update.setRetryCount(retryCount);
+        messageMapper.update(update,
+                Wrappers.<Message>lambdaUpdate()
+                        .eq(Message::getMessageId, messageId));
     }
 }
